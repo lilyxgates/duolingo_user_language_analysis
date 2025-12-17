@@ -6,6 +6,8 @@ import pandas as pd
 import os
 import re
 import plotly.express as px
+from dash import Dash, dcc, html, Input, Output
+
 
 # ------------------------------- #
 # Helper Function for File Naming #
@@ -100,3 +102,65 @@ fig_line = px.line(
 )
 fig_line.update_layout(legend_title_text='Language')
 fig_line.show()
+
+# --------------------------------------------------------
+# STACKED BAR GRAPH
+# --------------------------------------------------------
+
+# --- Extract rank and year ---
+long_df['rank'] = long_df['pop_year'].str.extract(r'(pop[12])')
+long_df['year'] = pd.to_numeric(long_df['pop_year'].str.extract(r'(\d{4})')[0], errors='coerce')
+long_df = long_df.dropna(subset=['year'])
+long_df['year'] = long_df['year'].astype(int)
+
+# --- Determine top 5 languages ---
+top_languages = (
+    long_df.groupby('language')['country']
+    .nunique()
+    .sort_values(ascending=False)
+    .head(5)
+    .index.tolist()
+)
+
+# Optional: force a custom order
+custom_order = top_languages
+
+# --- Filter for top 5 languages ---
+filtered_df = long_df[long_df['language'].isin(top_languages)]
+
+# --- Group data for stacked bar ---
+bar_data = filtered_df.groupby(['year', 'language', 'rank'])['country'].nunique().reset_index()
+bar_data.rename(columns={'country': 'num_countries'}, inplace=True)
+
+# --- Horizontal stacked bar chart with improved titles ---
+fig = px.bar(
+    bar_data,
+    y='language',
+    x='num_countries',
+    color='rank',
+    facet_col='year',
+    facet_col_wrap=3,
+    orientation='h',
+    category_orders={'language': custom_order},
+    title='Top 5 Languages by Popularity Rank Across Countries (2020–2025)',
+    labels={
+        'num_countries': 'Number of Countries Teaching Language',
+        'language': 'Language',
+        'rank': 'Popularity Rank'
+    },
+    color_discrete_map={'pop1': 'steelblue', 'pop2': 'orange'}  # Optional: consistent colors
+)
+
+# Clean up facet titles to show just the year
+for anno in fig.layout.annotations:
+    anno.text = anno.text.split('=')[-1]
+
+# Update layout for readability
+fig.update_layout(
+    legend_title_text='Popularity Rank',
+    title_font_size=18,
+    xaxis_title_font_size=14,
+    yaxis_title_font_size=14
+)
+
+fig.show()
