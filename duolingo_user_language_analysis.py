@@ -96,8 +96,23 @@ app.layout = html.Div([
         marks={int(y): str(int(y)) for y in sorted(bar_data['year'].unique())},
         tooltip={"placement": "bottom", "always_visible": True}
     ),
-    dcc.Graph(id='stacked-bar-graph')
+    dcc.Graph(id='stacked-bar-graph'),
+    
+    # ---------------- Footer ----------------
+    html.Div(
+        [
+            "Data source: ",
+            html.A(
+                "Duolingo Language Report (2020-2025)",
+                href="https://docs.google.com/spreadsheets/d/1CndYC5ZovYfmPuMN9T9Jxfa4CQXOzZrfQ2kAUaWG1ZU/edit?ref=blog.duolingo.com&gid=532174835#gid=532174835",
+                target="_blank",
+                style={"textDecoration": "underline", "color": "blue"}
+            )
+        ],
+        style={"textAlign": "center", "fontSize": 12, "marginTop": 20, "color": "gray"}
+    )
 ])
+
 
 # -------------------------------
 # Callback for stacked bar chart
