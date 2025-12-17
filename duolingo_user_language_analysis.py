@@ -1,9 +1,10 @@
 # Duolingo User Language Analysis
 # Created: 12/17/2025
 # Last Updated: 12/17/2025 
+
 import pandas as pd
 import plotly.express as px
-from dash import Dash, dcc, html, Input, Output
+from dash import Dash, dcc, html, Input, Output, dash_table
 from threading import Timer
 from werkzeug.serving import make_server
 import webbrowser
@@ -23,7 +24,7 @@ data_by_country_df['country'] = data_by_country_df['country'].astype(str).str.st
 language_cols = [col for col in data_by_country_df.columns if col.startswith('pop')]
 data_by_country_df = data_by_country_df[['country'] + language_cols]
 
-# Melt to long format
+# Melt to long format for charts
 long_df = data_by_country_df.melt(
     id_vars='country',
     value_vars=language_cols,
@@ -62,14 +63,32 @@ bar_data = filtered_df.groupby(['year', 'language', 'rank'])['country'].nunique(
 bar_data.rename(columns={'country': 'num_countries'}, inplace=True)
 
 # -------------------------------
+# Prepare table data (Top 2 Languages per Country per Year)
+# -------------------------------
+table_df = data_by_country_df.copy()
+pretty_col_map = {}
+for col in table_df.columns:
+    if col.startswith('pop1'):
+        year = col[-4:]
+        pretty_col_map[col] = f"Most Popular {year}"
+    elif col.startswith('pop2'):
+        year = col[-4:]
+        pretty_col_map[col] = f"Second Most Popular {year}"
+    else:
+        pretty_col_map[col] = col
+table_df.rename(columns=pretty_col_map, inplace=True)
+
+# -------------------------------
 # Build Dash App
 # -------------------------------
 app = Dash(__name__)
 
+country_options = [{'label': c, 'value': c} for c in sorted(table_df['country'].unique())]
+
 app.layout = html.Div([
-    html.H1("Duolingo Top 10 Languages Dashboard", style={'textAlign': 'center'}),
+    html.H1("Duolingo Top Languages Dashboard", style={'textAlign': 'center'}),
     
-    # ---------------- Line chart ----------------
+    # ---------------- Line Chart ----------------
     html.H2("Language Trends Over Time"),
     dcc.Graph(
         id='line-chart',
@@ -84,7 +103,7 @@ app.layout = html.Div([
         ).update_layout(legend_title_text='Language')
     ),
     
-    # ---------------- Stacked bar chart ----------------
+    # ---------------- Stacked Bar Chart ----------------
     html.H2("Top 10 Languages by Year"),
     html.Label("Select Year:"),
     dcc.Slider(
@@ -97,6 +116,39 @@ app.layout = html.Div([
         tooltip={"placement": "bottom", "always_visible": True}
     ),
     dcc.Graph(id='stacked-bar-graph'),
+    
+    # ---------------- Interactive Table ----------------
+    html.H2("Top 2 Languages per Country"),
+    html.Label("Select Countries:"),
+    dcc.Dropdown(
+        id='country-selector',
+        options=country_options,
+        multi=True,
+        value=[],
+        placeholder="Select one or more countries..."
+    ),
+    dash_table.DataTable(
+        id='top2-table',
+        columns=[{"name": col, "id": col} for col in table_df.columns],
+        data=table_df.to_dict('records'),
+        style_table={'overflowX': 'auto', 'marginTop': '20px'},
+        style_cell={'textAlign': 'center', 'padding': '5px'},
+        style_header={'backgroundColor': 'lightgrey', 'fontWeight': 'bold'},
+        page_size=15,
+        sort_action='native',
+        filter_action='native',
+        # Highlight "Most Popular" cells
+        style_data_conditional=[
+            {
+                'if': {
+                    'filter_query': f'{{{col}}} = "Most Popular {col[-4:]}"',
+                    'column_id': col
+                },
+                'backgroundColor': 'lightgreen',
+                'fontWeight': 'bold'
+            } for col in table_df.columns if col != 'country'
+        ]
+    ),
     
     # ---------------- Footer ----------------
     html.Div(
@@ -113,7 +165,6 @@ app.layout = html.Div([
     )
 ])
 
-
 # -------------------------------
 # Callback for stacked bar chart
 # -------------------------------
@@ -123,25 +174,18 @@ app.layout = html.Div([
 )
 def update_bar(selected_year):
     selected_year = int(selected_year)
-    
     year_df = bar_data[bar_data['year'] == selected_year].copy()
-    
-    # Map ranks to pretty labels
     rank_map = {'pop1': 'Most Popular', 'pop2': 'Second Most Popular'}
     year_df['rank_pretty'] = year_df['rank'].map(rank_map)
     
-    # If empty, show placeholder
     if year_df.empty:
         fig = px.bar(
-            x=[0],
-            y=['No data'],
-            orientation='h',
+            x=[0], y=['No data'], orientation='h',
             labels={'x': 'Number of Countries', 'y': 'Language'},
             title=f"No data available for {selected_year}"
         )
         return fig
 
-    # Horizontal stacked bar chart
     fig = px.bar(
         year_df,
         y='language',
@@ -154,20 +198,26 @@ def update_bar(selected_year):
                 'language': 'Language',
                 'rank_pretty': 'Popularity Rank'}
     )
-
-    # Hover info
-    fig.update_traces(
-        hovertemplate="<b>Language:</b> %{y}<br><b>Rank:</b> %{customdata[0]}<br><b>Number of Countries:</b> %{x}<extra></extra>",
-        customdata=year_df[['rank_pretty']]
-    )
-
     fig.update_layout(
         title=f"Top 10 Languages in {selected_year} (Most Popular vs Second Most Popular)",
         legend_title_text='Popularity Rank',
         yaxis={'categoryorder': 'total ascending'}
     )
-    
     return fig
+
+# -------------------------------
+# Callback for table filtering
+# -------------------------------
+@app.callback(
+    Output('top2-table', 'data'),
+    Input('country-selector', 'value')
+)
+def update_table(selected_countries):
+    if not selected_countries:
+        filtered = table_df
+    else:
+        filtered = table_df[table_df['country'].isin(selected_countries)]
+    return filtered.to_dict('records')
 
 # -------------------------------
 # Auto-launch browser
@@ -176,13 +226,8 @@ def open_browser(url):
     webbrowser.open_new(url)
 
 if __name__ == "__main__":
-    # Dynamic port
     port = 0
     server = make_server("127.0.0.1", port, app.server)
     actual_port = server.socket.getsockname()[1]
-    
-    # Open browser after 1 second
     Timer(1, lambda: open_browser(f"http://127.0.0.1:{actual_port}/")).start()
-    
-    # Start Dash server
     server.serve_forever()
