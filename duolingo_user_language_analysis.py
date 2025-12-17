@@ -1,72 +1,29 @@
 # Duolingo User Language Analysis
 # Created: 12/17/2025
 # Last Updated: 12/17/2025 
-
 import pandas as pd
-import os
-import re
 import plotly.express as px
 from dash import Dash, dcc, html, Input, Output
+from threading import Timer
+from werkzeug.serving import make_server
+import webbrowser
 
-
-# ------------------------------- #
-# Helper Function for File Naming #
-# ------------------------------- #
-
-# Ensure snake_case and proper naming convention
-def to_snake_case(s):
-    """
-    Convert a string to snake_case suitable for filenames:
-    - lowercase
-    - spaces and hyphens replaced with underscores
-    - remove parentheses, slashes, colons, and other special characters
-    - collapse multiple underscores
-    """
-    s = s.lower()                      # lowercase
-    s = re.sub(r"[ /\\\-]", "_", s)    # replace space, /, \, - with _
-    s = re.sub(r"[^a-z0-9_]", "", s)   # remove all non-alphanumeric and non-underscore chars
-    s = re.sub(r"_+", "_", s)          # collapse multiple underscores
-    s = s.strip("_")                    # remove leading/trailing underscores
-    return s
-
-# ------------------------------------- #
-# Loading Duolingo Language Report Data
-# ------------------------------------- #
-
-# Load "Duolingo Language Report [2020-2025]: Public data"
+# -------------------------------
+# Load & Prepare Data
+# -------------------------------
 file_path = "duolingo_language_report_2020_2025.xlsx"
+data_by_country_df = pd.read_excel(file_path, sheet_name="Data by country", skiprows=1)
 
-# --- Overview Sheet --- #
-overview_sheet = "Overview"
-overview_sheet_df = pd.read_excel(file_path, sheet_name=overview_sheet, skiprows=0)
-
-# --- Data by Country Sheet --- #
-data_by_country_sheet = "Data by country"
-data_by_country_df = pd.read_excel(file_path, sheet_name=data_by_country_sheet, skiprows=1)
-
-# -------------------------------
-# Inspect & Clean Columns
-# -------------------------------
-# Strip whitespace from all column names
+# Clean columns
 data_by_country_df.columns = [str(c).strip() for c in data_by_country_df.columns]
-
-# Rename first column to 'country'
 data_by_country_df.rename(columns={data_by_country_df.columns[0]: 'country'}, inplace=True)
-
-# Strip whitespace from country names
 data_by_country_df['country'] = data_by_country_df['country'].astype(str).str.strip()
 
-print(data_by_country_df['country'])
-
-# -------------------------------
-# Keep only language columns
-# -------------------------------
+# Keep only language columns (pop1/pop2)
 language_cols = [col for col in data_by_country_df.columns if col.startswith('pop')]
 data_by_country_df = data_by_country_df[['country'] + language_cols]
 
-# -------------------------------
-# Melt to long-form tidy data
-# -------------------------------
+# Melt to long format
 long_df = data_by_country_df.melt(
     id_vars='country',
     value_vars=language_cols,
@@ -74,93 +31,143 @@ long_df = data_by_country_df.melt(
     value_name='language'
 ).dropna(subset=['language'])
 
-# Extract year safely
-long_df['year'] = pd.to_numeric(long_df['pop_year'].str.extract(r'(\d{4})')[0], errors='coerce')
-long_df = long_df.dropna(subset=['year'])
-long_df['year'] = long_df['year'].astype(int)
-
-
-
-# ==================================
-# ======= DATA VIZUALIZATION =======
-# ==================================
-
-# --------------------------------------------------------
-# LINE CHART
-# Number of Countries Teaching Each Language Over Time
-# --------------------------------------------------------
-line_data = long_df.groupby(['year', 'language'])['country'].nunique().reset_index()
-
-fig_line = px.line(
-    line_data,
-    x='year',
-    y='country',
-    color='language',
-    markers=True,
-    title='Number of Countries Teaching Each Language Over Time',
-    labels={'country': 'Number of Countries', 'year': 'Year', 'language': 'Language'}
-)
-fig_line.update_layout(legend_title_text='Language')
-fig_line.show()
-
-# --------------------------------------------------------
-# STACKED BAR GRAPH
-# --------------------------------------------------------
-
-# --- Extract rank and year ---
+# Extract rank and year
 long_df['rank'] = long_df['pop_year'].str.extract(r'(pop[12])')
 long_df['year'] = pd.to_numeric(long_df['pop_year'].str.extract(r'(\d{4})')[0], errors='coerce')
 long_df = long_df.dropna(subset=['year'])
 long_df['year'] = long_df['year'].astype(int)
 
-# --- Determine top 5 languages ---
+# -------------------------------
+# Determine top 10 languages
+# -------------------------------
 top_languages = (
     long_df.groupby('language')['country']
     .nunique()
     .sort_values(ascending=False)
-    .head(5)
+    .head(10)
     .index.tolist()
 )
-
-# Optional: force a custom order
-custom_order = top_languages
-
-# --- Filter for top 5 languages ---
 filtered_df = long_df[long_df['language'].isin(top_languages)]
 
-# --- Group data for stacked bar ---
+# -------------------------------
+# Prepare line chart data
+# -------------------------------
+line_data = filtered_df.groupby(['year', 'language'])['country'].nunique().reset_index()
+line_data.rename(columns={'country': 'num_countries'}, inplace=True)
+
+# -------------------------------
+# Prepare stacked bar chart data
+# -------------------------------
 bar_data = filtered_df.groupby(['year', 'language', 'rank'])['country'].nunique().reset_index()
 bar_data.rename(columns={'country': 'num_countries'}, inplace=True)
 
-# --- Horizontal stacked bar chart with improved titles ---
-fig = px.bar(
-    bar_data,
-    y='language',
-    x='num_countries',
-    color='rank',
-    facet_col='year',
-    facet_col_wrap=3,
-    orientation='h',
-    category_orders={'language': custom_order},
-    title='Top 5 Languages by Popularity Rank Across Countries (2020–2025)',
-    labels={
-        'num_countries': 'Number of Countries Teaching Language',
-        'language': 'Language',
-        'rank': 'Popularity Rank'
-    },
-    color_discrete_map={'pop1': 'steelblue', 'pop2': 'orange'}  # Optional: consistent colors
+# -------------------------------
+# Build Dash App
+# -------------------------------
+app = Dash(__name__)
+
+app.layout = html.Div([
+    html.H1("Duolingo Top 10 Languages Dashboard", style={'textAlign': 'center'}),
+    
+    # ---------------- Line chart ----------------
+    html.H2("Language Trends Over Time"),
+    dcc.Graph(
+        id='line-chart',
+        figure=px.line(
+            line_data,
+            x='year',
+            y='num_countries',
+            color='language',
+            markers=True,
+            labels={'num_countries': 'Number of Countries', 'year': 'Year', 'language': 'Language'},
+            title='Number of Countries Teaching Top 10 Languages Over Time'
+        ).update_layout(legend_title_text='Language')
+    ),
+    
+    # ---------------- Stacked bar chart ----------------
+    html.H2("Top 10 Languages by Year"),
+    html.Label("Select Year:"),
+    dcc.Slider(
+        id='year-slider',
+        min=int(bar_data['year'].min()),
+        max=int(bar_data['year'].max()),
+        step=1,
+        value=int(bar_data['year'].min()),
+        marks={int(y): str(int(y)) for y in sorted(bar_data['year'].unique())},
+        tooltip={"placement": "bottom", "always_visible": True}
+    ),
+    dcc.Graph(id='stacked-bar-graph')
+])
+
+# -------------------------------
+# Callback for stacked bar chart
+# -------------------------------
+@app.callback(
+    Output('stacked-bar-graph', 'figure'),
+    Input('year-slider', 'value')
 )
+def update_bar(selected_year):
+    selected_year = int(selected_year)
+    
+    year_df = bar_data[bar_data['year'] == selected_year].copy()
+    
+    # Map ranks to pretty labels
+    rank_map = {'pop1': 'Most Popular', 'pop2': 'Second Most Popular'}
+    year_df['rank_pretty'] = year_df['rank'].map(rank_map)
+    
+    # If empty, show placeholder
+    if year_df.empty:
+        fig = px.bar(
+            x=[0],
+            y=['No data'],
+            orientation='h',
+            labels={'x': 'Number of Countries', 'y': 'Language'},
+            title=f"No data available for {selected_year}"
+        )
+        return fig
 
-# Clean up facet titles to show just the year
-for anno in fig.layout.annotations:
-    anno.text = anno.text.split('=')[-1]
+    # Horizontal stacked bar chart
+    fig = px.bar(
+        year_df,
+        y='language',
+        x='num_countries',
+        color='rank_pretty',
+        orientation='h',
+        category_orders={'language': top_languages},
+        color_discrete_map={'Most Popular': 'steelblue', 'Second Most Popular': 'orange'},
+        labels={'num_countries': 'Number of Countries Teaching Language',
+                'language': 'Language',
+                'rank_pretty': 'Popularity Rank'}
+    )
 
-# Update layout for readability
-fig.update_layout(
-    legend_title_text='Popularity Rank',
-    title_font_size=18,
-    xaxis_title_font_size=14,
-    yaxis_title_font_size=14
-)
+    # Hover info
+    fig.update_traces(
+        hovertemplate="<b>Language:</b> %{y}<br><b>Rank:</b> %{customdata[0]}<br><b>Number of Countries:</b> %{x}<extra></extra>",
+        customdata=year_df[['rank_pretty']]
+    )
 
-fig.show()
+    fig.update_layout(
+        title=f"Top 10 Languages in {selected_year} (Most Popular vs Second Most Popular)",
+        legend_title_text='Popularity Rank',
+        yaxis={'categoryorder': 'total ascending'}
+    )
+    
+    return fig
+
+# -------------------------------
+# Auto-launch browser
+# -------------------------------
+def open_browser(url):
+    webbrowser.open_new(url)
+
+if __name__ == "__main__":
+    # Dynamic port
+    port = 0
+    server = make_server("127.0.0.1", port, app.server)
+    actual_port = server.socket.getsockname()[1]
+    
+    # Open browser after 1 second
+    Timer(1, lambda: open_browser(f"http://127.0.0.1:{actual_port}/")).start()
+    
+    # Start Dash server
+    server.serve_forever()
