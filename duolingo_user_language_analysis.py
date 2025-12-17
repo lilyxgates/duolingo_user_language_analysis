@@ -77,9 +77,26 @@ long_df['year'] = pd.to_numeric(long_df['pop_year'].str.extract(r'(\d{4})')[0], 
 long_df = long_df.dropna(subset=['year'])
 long_df['year'] = long_df['year'].astype(int)
 
-# Optional: keep only necessary columns
-#long_df = long_df[['country', 'year', 'language']]
 
-print("Sample of tidy long-form data:")
-print(long_df.head(10))
 
+# ==================================
+# ======= DATA VIZUALIZATION =======
+# ==================================
+
+# --------------------------------------------------------
+# LINE CHART
+# Number of Countries Teaching Each Language Over Time
+# --------------------------------------------------------
+line_data = long_df.groupby(['year', 'language'])['country'].nunique().reset_index()
+
+fig_line = px.line(
+    line_data,
+    x='year',
+    y='country',
+    color='language',
+    markers=True,
+    title='Number of Countries Teaching Each Language Over Time',
+    labels={'country': 'Number of Countries', 'year': 'Year', 'language': 'Language'}
+)
+fig_line.update_layout(legend_title_text='Language')
+fig_line.show()
