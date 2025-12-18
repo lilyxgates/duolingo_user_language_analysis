@@ -231,3 +231,12 @@ if __name__ == "__main__":
     actual_port = server.socket.getsockname()[1]
     Timer(1, lambda: open_browser(f"http://127.0.0.1:{actual_port}/")).start()
     server.serve_forever()
+
+
+"""
+TODO: 
+- Increase bar graph to include top 20 instead of top 10
+- CSS better font consistency
+- CSS border padding
+- 2023 bar colors are switched
+"""
